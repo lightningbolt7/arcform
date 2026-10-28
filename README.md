@@ -19,7 +19,7 @@ On Windows 11, Arcform is under **Show more options** (or hold Shift while right
 | `.mp4` | MP3 (audio) | MP3 | ✓ |
 | `.mov` / `.mkv` / `.webm` / `.avi` | MP4, MP3 (audio) | MP4, MP3 | ✓ |
 
-PDFs also have **Add to merge queue** (see below).
+PDFs also have **Split PDF ▸** and **Add to merge queue** (see below).
 
 - **Convert to** saves the new file next to the original. Nothing is overwritten:
   if `photo.png` already exists you get `photo (1).png`. Photos are turned upright
@@ -46,6 +46,24 @@ Images are processed several at a time. Word documents, PDFs and videos go one
 at a time (Word and the PDF library can only do one at once, and video encoding
 already uses every CPU core). Word stays open between documents in a batch and
 quits a few seconds after the last one.
+
+## Splitting PDFs
+
+Right-click a PDF → **Arcform → Split PDF ▸**. The parts go into a new folder
+next to it, such as `report (split)`.
+
+- **Choose where to cut…** shows every page as a thumbnail. Click the ✂ between
+  two pages to cut there, and click a page to leave it out. Each resulting file
+  gets its own colour, so you can see exactly what goes where before splitting.
+  Quick cuts do the clicking for you: every page, every N pages, at chapters,
+  or at blank pages.
+- **By chapters** uses the PDF's bookmarks, naming each file after its chapter
+  (`01 - Introduction.pdf`, …).
+- **At blank pages** is for a stack of documents scanned in one go with blank
+  sheets between them. It finds the blank sheets, drops them, and saves each
+  document separately.
+- **Into email-sized parts** makes the fewest parts that are each under 25 MB.
+- **Every page** saves each page as its own PDF.
 
 ## Merging PDFs
 
@@ -104,6 +122,10 @@ python arcform.py copy jpg "IMG_0042.heic" --no-gui
 ```
 
 ```bash
+python arcform.py split chapters "handbook.pdf" --no-gui
+```
+
+```bash
 python arcform.py merge-generate "C:\some\folder" --no-gui
 ```
 
@@ -117,8 +139,9 @@ Unexpected errors are written to `arcform_error.log` in this folder.
 | `converters.py` | Format conversions, ffmpeg helpers |
 | `shrink.py` | Shrink to fit |
 | `clipboard.py` | Putting files on the clipboard |
+| `split.py` | Splitting PDFs |
 | `merge_queue.py` | The PDF merge queue |
 | `tasks.py` | Jobs, and handing them to one shared window over a named pipe |
-| `window.py` | The job window and the merge queue editor |
+| `window.py` | The job window, the merge queue editor and the PDF cutter |
 | `menu.py` | Registry entries for the right-click menu |
 | `install.py` | Adds or removes the menu |

@@ -5,6 +5,10 @@ Usage (add --no-gui to print the result instead of showing a window):
     arcform.py copy <format> <file>          convert, then put the result on the clipboard
     arcform.py shrink <MB> <file>            make a copy under the size limit
 
+Splitting PDFs (the parts go in a new "<name> (split)" folder):
+    arcform.py split-view <pdf>              choose where to cut, in a window
+    arcform.py split <pages|chapters|blank|size> <pdf>
+
 PDF merge queue:
     arcform.py merge-add <pdf>
     arcform.py merge-view <folder-or-file>
@@ -25,6 +29,7 @@ if sys.stderr is None:
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 import converters  # noqa: E402
 import merge_queue  # noqa: E402
+import split  # noqa: E402
 import tasks  # noqa: E402
 
 
@@ -33,6 +38,8 @@ def parse_task(command, args):
         return {"kind": command, "target": args[0].lower(), "path": args[1]}
     if command == "shrink" and len(args) == 2 and args[0].isdigit():
         return {"kind": "shrink", "size": int(args[0]), "path": args[1]}
+    if command == "split" and len(args) == 2 and args[0] in split.MODES:
+        return {"kind": "split", "mode": args[0], "path": args[1]}
     if command == "merge-generate" and len(args) == 1:
         return {"kind": "merge", "path": args[0]}
     return None
@@ -78,6 +85,16 @@ def main(argv) -> int:
         if not window.MergeQueueWindow(Path(rest[0])).show():
             return 0
         task = {"kind": "merge", "path": rest[0]}
+    elif command == "split-view" and len(rest) == 1:
+        import window
+        try:
+            parts = window.SplitWindow(Path(rest[0])).show()
+        except Exception as exc:
+            window.show_error(tasks.describe_error(exc))
+            return 1
+        if not parts:
+            return 0
+        task = {"kind": "split", "mode": "custom", "parts": parts, "path": rest[0]}
     else:
         task = parse_task(command, rest)
     if task is None:

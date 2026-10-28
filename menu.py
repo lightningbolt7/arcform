@@ -7,6 +7,7 @@ import sys
 import winreg
 from pathlib import Path
 
+import split
 from converters import CONVERSIONS, FORMAT_NAMES, copy_targets
 from shrink import SHRINKABLE, SIZES
 
@@ -21,6 +22,7 @@ BACKGROUND_MENU = r"Software\Classes\Directory\Background\shell\Arcform"
 # Submenu keys are shown in name order: conversions, Copy as, Shrink, then merge items.
 COPY_MENU = "20_copy"
 SHRINK_MENU = "30_shrink"
+SPLIT_MENU = "40_split"
 MERGE_ADD = "50_merge_add"
 MERGE_GENERATE = "51_merge_generate"
 MERGE_VIEW = "52_merge_view"
@@ -97,6 +99,12 @@ def register_file_menus() -> None:
             add_submenu(sub, "Shrink to fit", icon=False)
             for i, (size, label) in enumerate(SIZES.items()):
                 add_item(sub, f"{i:02d}_{size}mb", label, command("shrink", str(size), '"%1"'))
+
+    sub = FILE_MENU.format(ext=".pdf") + f"\\shell\\{SPLIT_MENU}"
+    add_submenu(sub, "Split PDF", icon=False)
+    add_item(sub, "00_view", "Choose where to cut…", command("split-view", '"%1"'))
+    for i, (mode, label) in enumerate(split.MODES.items(), 1):
+        add_item(sub, f"{i:02d}_{mode}", label, command("split", mode, '"%1"'), separator=i == 1)
 
     add_item(FILE_MENU.format(ext=".pdf"), MERGE_ADD, "Add to merge queue",
              command("merge-add", '"%1"'), separator=True)

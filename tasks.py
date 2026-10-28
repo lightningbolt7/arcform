@@ -19,6 +19,7 @@ from pathlib import Path
 
 import merge_queue
 import shrink
+import split
 from converters import FORMAT_NAMES, VIDEO_EXTS, ConversionError, convert
 
 PIPE = rf"\\.\pipe\arcform-{getpass.getuser()}"
@@ -56,6 +57,11 @@ def describe(task):
         return name, f"Copy as {FORMAT_NAMES[task['target']]}"
     if kind == "shrink":
         return name, f"Shrink under {task['size']} MB"
+    if kind == "split":
+        if task["mode"] == "custom":
+            files = len(task["parts"])
+            return name, f"Split into {files} file{'s' if files > 1 else ''}"
+        return name, split.ACTIONS[task["mode"]]
     raise ValueError(f"Unknown job: {kind}")
 
 
@@ -71,6 +77,8 @@ def run(task, progress=None):
         return shrink.shrink(path, task["size"], progress)
     if kind == "merge":
         return merge_queue.generate(path)
+    if kind == "split":
+        return split.split(path, task["mode"], task.get("parts"), progress)
     raise ValueError(f"Unknown job: {kind}")
 
 

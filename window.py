@@ -3,6 +3,7 @@
 import ctypes
 import os
 import queue
+import re
 import subprocess
 import threading
 import time
@@ -14,6 +15,7 @@ import clipboard
 import converters
 import menu
 import merge_queue
+import split
 import tasks
 
 # "Copy as" jobs arriving this close together came from one multi-select,
@@ -56,6 +58,14 @@ def _place(root):
 
 def _show_in_folder(path: Path) -> None:
     subprocess.Popen(["explorer", "/select,", str(path)])
+
+
+def show_error(text: str) -> None:
+    """A plain error box, for problems before any Arcform window is open."""
+    root, _, _ = _make_root("Arcform")
+    root.withdraw()
+    messagebox.showerror("Arcform", text, parent=root)
+    root.destroy()
 
 
 # ------------------------------------------------------------------ job list
@@ -472,3 +482,262 @@ class MergeQueueWindow:
             self.drag = None
             self._reload(select=moved)
         self.drag = None
+
+
+# ---------------------------------------------------------------- PDF cutter
+
+class SplitWindow:
+    """Choose where to split a PDF: click between pages to cut, click a page to leave it out.
+
+    Each resulting file gets its own colour, so you can see what goes where before saving.
+    """
+
+    COLORS = ["#4F7DF3", "#16A394", "#F2994A", "#9B51E0", "#E5484D", "#2FA84F", "#C99A06", "#2D9CDB"]
+    CUT = "#E5484D"
+    BACKGROUND = "#F3F3F6"
+    BATCH = 6  # thumbnails drawn per step, so the window stays responsive
+
+    def __init__(self, pdf: Path):
+        self.pdf = Path(pdf).resolve()
+        self.doc = split.open_pdf(self.pdf)
+        self.count = self.doc.page_count
+        self.chapters = split.chapters(self.doc)
+        self.cuts = set()  # page indexes with a cut after them
+        self.skipped = set()  # pages left out
+        self.thumbs = [None] * self.count
+        self.image_items = {}
+        self.columns = 0
+        self.result = None
+
+        self.root, px, heading = _make_root("Arcform - Split PDF")
+        self.px = px
+        self.tile_w, self.tile_h, self.label_h = px(112), px(146), px(30)
+        self.gap, self.margin, self.row_gap = px(34), px(16), px(14)
+        root = self.root
+        root.protocol("WM_DELETE_WINDOW", self._close)
+        frame = ttk.Frame(root, padding=px(16))
+        frame.pack(fill="both", expand=True)
+        pages = f"{self.count} page{'s' if self.count != 1 else ''}"
+        ttk.Label(frame, text=f"Split {self.pdf.name}", font=heading).pack(anchor="w")
+        ttk.Label(frame, text=f"{pages}. Click the ✂ between two pages to cut there. Click a page to leave it out.",
+                  foreground=MUTED).pack(anchor="w", pady=(px(2), 0))
+
+        tools = ttk.Frame(frame)
+        tools.pack(fill="x", pady=(px(10), px(8)))
+        ttk.Label(tools, text="Quick cuts:").pack(side="left", padx=(0, px(6)))
+        ttk.Button(tools, text="Every page", command=self._every_page).pack(side="left")
+        ttk.Button(tools, text="Every", command=self._every_n).pack(side="left", padx=(px(6), 0))
+        self.every = tk.IntVar(value=2)
+        ttk.Spinbox(tools, from_=2, to=max(2, self.count), width=4,
+                    textvariable=self.every).pack(side="left", padx=px(4))
+        ttk.Label(tools, text="pages").pack(side="left")
+        ttk.Button(tools, text="Chapters", command=self._chapters,
+                   state="normal" if self.chapters else "disabled").pack(side="left", padx=(px(12), 0))
+        ttk.Button(tools, text="Blank pages", command=self._blank_pages).pack(side="left", padx=(px(6), 0))
+        ttk.Button(tools, text="Clear", command=self._clear).pack(side="right")
+
+        area = ttk.Frame(frame)
+        area.pack(fill="both", expand=True)
+        self.canvas = tk.Canvas(area, width=px(820), height=px(470), background=self.BACKGROUND,
+                                highlightthickness=0, yscrollincrement=px(40))
+        scroll = ttk.Scrollbar(area, orient="vertical", command=self.canvas.yview)
+        self.canvas.configure(yscrollcommand=scroll.set)
+        scroll.pack(side="right", fill="y")
+        self.canvas.pack(side="left", fill="both", expand=True)
+        self.canvas.bind("<Configure>", lambda e: self._layout())
+        self.canvas.bind("<Button-1>", self._click)
+        self.canvas.bind("<Motion>", self._hover)
+        root.bind("<MouseWheel>", lambda e: self.canvas.yview_scroll(int(-e.delta / 120), "units"))
+
+        bottom = ttk.Frame(frame)
+        bottom.pack(fill="x", pady=(px(12), 0))
+        ttk.Button(bottom, text="Close", command=self._close).pack(side="right")
+        self.split_button = ttk.Button(bottom, command=self._split, default="active")
+        self.split_button.pack(side="right", padx=(0, px(6)))
+        self.summary = ttk.Label(bottom, foreground=MUTED, wraplength=px(560), justify="left")
+        self.summary.pack(side="left", fill="x", expand=True)
+
+        self._summarize()
+        root.after(50, self._render, 0)
+
+    def show(self):
+        """Show the window. Returns the chosen parts (lists of page indexes), or None."""
+        _place(self.root)
+        self.root.mainloop()
+        return self.result
+
+    # ---- the plan
+
+    def parts(self):
+        groups, current = [], []
+        for page in range(self.count):
+            if page not in self.skipped:
+                current.append(page)
+            if page in self.cuts and current:
+                groups.append(current)
+                current = []
+        if current:
+            groups.append(current)
+        return groups
+
+    def _summarize(self) -> None:
+        groups = self.parts()
+        if not groups:
+            text, button, state = "Every page is left out.", "Split", "disabled"
+        elif len(groups) == 1 and not self.skipped:
+            text, button, state = "No cuts yet.", "Split", "disabled"
+        elif len(groups) == 1:
+            text = f"1 file: pages {split.page_ranges(groups[0])} ({len(self.skipped)} left out)"
+            button, state = "Save without left-out pages", "normal"
+        else:
+            shown = " · ".join(split.page_ranges(g) for g in groups[:8]) + (" · …" if len(groups) > 8 else "")
+            text = f"{len(groups)} files: pages {shown}"
+            button, state = f"Split into {len(groups)} files", "normal"
+        self.summary.config(text=text)
+        self.split_button.config(text=button, state=state)
+
+    # ---- drawing
+
+    def _layout(self) -> None:
+        width = self.canvas.winfo_width()
+        columns = max(1, (width - 2 * self.margin + self.gap) // (self.tile_w + self.gap))
+        if columns != self.columns:
+            self.columns = columns
+            self._draw()
+
+    def _position(self, page):
+        row, col = divmod(page, self.columns or 1)
+        return (self.margin + col * (self.tile_w + self.gap),
+                self.margin + row * (self.tile_h + self.label_h + self.row_gap))
+
+    def _draw(self) -> None:
+        c = self.canvas
+        c.delete("all")
+        self.image_items.clear()
+        part_of = {page: k for k, group in enumerate(self.parts()) for page in group}
+        family = font.nametofont("TkDefaultFont").cget("family")
+        for page in range(self.count):
+            x, y = self._position(page)
+            tag = f"p{page}"
+            skipped = page in self.skipped
+            color = "#B8B8C2" if skipped else self.COLORS[part_of[page] % len(self.COLORS)]
+            c.create_rectangle(x - 4, y - 4, x + self.tile_w + 4, y + self.tile_h + 4,
+                               fill="white", outline=color, width=self.px(3), tags=tag)
+            cx, cy = x + self.tile_w / 2, y + self.tile_h / 2
+            self.image_items[page] = c.create_image(cx, cy, image=self.thumbs[page] or "", tags=tag)
+            if self.thumbs[page] is None:
+                c.create_text(cx, cy, text="…", fill=MUTED, tags=(tag, f"wait{page}"))
+            if skipped:
+                c.create_rectangle(x, y, x + self.tile_w, y + self.tile_h, fill="white", stipple="gray50",
+                                   outline="", tags=tag)
+                c.create_text(cx, cy, text="✕", fill=ERROR, font=(family, 28, "bold"), tags=tag)
+            label = f"Page {page + 1}  ·  " + ("left out" if skipped else f"file {part_of[page] + 1}")
+            c.create_text(cx, y + self.tile_h + self.label_h / 2 + 2, text=label,
+                          fill=MUTED if skipped else color, tags=tag)
+            if page < self.count - 1:
+                self._draw_gap(page, x + self.tile_w, y)
+        rows = -(-self.count // max(self.columns, 1))
+        height = 2 * self.margin + rows * (self.tile_h + self.label_h + self.row_gap)
+        c.configure(scrollregion=(0, 0, c.winfo_width(), height))
+        self._summarize()
+
+    def _draw_gap(self, page, x, y) -> None:
+        c, tag = self.canvas, f"g{page}"
+        middle = x + self.gap / 2
+        # A clickable strip between the two pages, the same colour as the background,
+        # kept clear of both pages' coloured frames.
+        frame = 4 + self.px(3)
+        c.create_rectangle(x + frame, y - 4, x + self.gap - frame, y + self.tile_h + 4,
+                           fill=self.BACKGROUND, outline="", tags=tag)
+        if page in self.cuts:
+            c.create_line(middle, y - 6, middle, y + self.tile_h + 6, fill=self.CUT, width=self.px(2),
+                          dash=(6, 4), tags=tag)
+            c.create_text(middle, y + self.tile_h / 2, text="✂", fill=self.CUT,
+                          font=("Segoe UI Symbol", 18), tags=tag)
+        else:
+            c.create_text(middle, y + self.tile_h / 2, text="✂", fill="#C9C9D2",
+                          font=("Segoe UI Symbol", 12), tags=tag)
+
+    def _render(self, start) -> None:
+        """Make page thumbnails a few at a time, so even long PDFs open instantly."""
+        import pymupdf
+        from PIL import Image, ImageTk
+
+        for page in range(start, min(start + self.BATCH, self.count)):
+            rect = self.doc[page].rect
+            zoom = min(self.tile_w / rect.width, self.tile_h / rect.height)
+            pix = self.doc[page].get_pixmap(matrix=pymupdf.Matrix(zoom, zoom), alpha=False)
+            self.thumbs[page] = ImageTk.PhotoImage(Image.frombytes("RGB", (pix.width, pix.height), pix.samples))
+            if page in self.image_items:
+                self.canvas.itemconfig(self.image_items[page], image=self.thumbs[page])
+                self.canvas.delete(f"wait{page}")
+        if start + self.BATCH < self.count:
+            self.root.after(1, self._render, start + self.BATCH)
+
+    # ---- clicks
+
+    def _target(self):
+        """("p", page) over a page, ("g", page) over the gap after a page, else (None, None)."""
+        for tag in self.canvas.gettags("current"):
+            match = re.fullmatch(r"([pg])(\d+)", tag)
+            if match:
+                return match.group(1), int(match.group(2))
+        return None, None
+
+    def _click(self, event) -> None:
+        kind, page = self._target()
+        if kind == "g":
+            self.cuts ^= {page}
+        elif kind == "p":
+            self.skipped ^= {page}
+        else:
+            return
+        self._draw()
+
+    def _hover(self, event) -> None:
+        kind, _ = self._target()
+        self.canvas.configure(cursor="hand2" if kind else "")
+
+    # ---- quick cuts
+
+    def _every_page(self) -> None:
+        self.cuts = set(range(self.count - 1))
+        self._draw()
+
+    def _every_n(self) -> None:
+        try:
+            n = max(1, int(self.every.get()))
+        except (tk.TclError, ValueError):
+            return
+        self.cuts = {page for page in range(self.count - 1) if (page + 1) % n == 0}
+        self._draw()
+
+    def _chapters(self) -> None:
+        self.cuts = {first - 1 for first, _ in self.chapters if first > 0}
+        self._draw()
+
+    def _blank_pages(self) -> None:
+        self.root.configure(cursor="watch")
+        self.root.update()
+        blanks = split.blank_pages(self.doc)
+        self.root.configure(cursor="")
+        if not blanks:
+            messagebox.showinfo("Arcform", "No blank pages found.", parent=self.root)
+            return
+        self.skipped |= set(blanks)
+        for page in blanks:  # cut on both sides, so each document becomes its own file
+            self.cuts |= {page - 1, page} - {-1, self.count - 1}
+        self._draw()
+
+    def _clear(self) -> None:
+        self.cuts.clear()
+        self.skipped.clear()
+        self._draw()
+
+    def _split(self) -> None:
+        self.result = self.parts()
+        self._close()
+
+    def _close(self) -> None:
+        self.doc.close()
+        self.root.destroy()
