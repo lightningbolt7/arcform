@@ -5,6 +5,9 @@ Usage (add --no-gui to print the result instead of showing a window):
     arcform.py copy <format> <file>          convert, then put the result on the clipboard
     arcform.py shrink <MB> <file>            make a copy under the size limit
 
+Send to phone (shows a QR code; files selected together share one code):
+    arcform.py share <file>
+
 Splitting PDFs (the parts go in a new "<name> (split)" folder):
     arcform.py split-view <pdf>              choose where to cut, in a window
     arcform.py split <pages|chapters|blank|size> <pdf>
@@ -79,6 +82,10 @@ def main(argv) -> int:
         return run_quietly(lambda: merge_queue.add(Path(rest[0])))
     if command == "merge-clear" and not rest:
         return run_quietly(merge_queue.clear)
+    if command == "share" and len(rest) == 1:
+        import window
+        tasks.submit({"kind": "share", "path": rest[0]}, window.open_share_window, pipe=tasks.SHARE_PIPE)
+        return 0
 
     if command == "merge-view" and len(rest) == 1:
         import window

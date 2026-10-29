@@ -23,6 +23,7 @@ import split
 from converters import FORMAT_NAMES, VIDEO_EXTS, ConversionError, convert
 
 PIPE = rf"\\.\pipe\arcform-{getpass.getuser()}"
+SHARE_PIPE = PIPE + "-share"  # the Send to phone window gathers its files the same way
 AUTHKEY = b"arcform"
 LOG_FILE = Path(__file__).resolve().parent / "arcform_error.log"
 # "Copy as" results live here until pasted; old ones are cleaned up.
@@ -104,20 +105,20 @@ def describe_error(exc: Exception) -> str:
 
 # --------------------------------------------------------- one shared window
 
-def submit(task, open_window) -> None:
+def submit(task, open_window, pipe=PIPE) -> None:
     """Send the job to the open Arcform window, or become that window."""
     deadline = time.monotonic() + 20
     while time.monotonic() < deadline:
         try:
             # Only one process can create the pipe, and that one shows the window.
-            listener = Listener(PIPE, family="AF_PIPE", authkey=AUTHKEY)
+            listener = Listener(pipe, family="AF_PIPE", authkey=AUTHKEY)
         except OSError:
             pass
         else:
             open_window(listener, task)
             return
         try:
-            with Client(PIPE, family="AF_PIPE", authkey=AUTHKEY) as conn:
+            with Client(pipe, family="AF_PIPE", authkey=AUTHKEY) as conn:
                 conn.send_bytes(json.dumps(task).encode())
                 if conn.recv_bytes() == b"ok":
                     return

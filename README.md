@@ -47,6 +47,24 @@ at a time (Word and the PDF library can only do one at once, and video encoding
 already uses every CPU core). Word stays open between documents in a batch and
 quits a few seconds after the last one.
 
+## Send to phone
+
+Right-click **any** file → **Send to phone** (it has its own menu entry with the
+Arcform icon). A window shows a QR code: scan it with an iPhone or Android
+camera and the phone opens a download page. No app and no cable needed, and
+nothing is uploaded to the internet.
+
+- Select several files to send them all with one code, with a **Download all (.zip)** button.
+  Files sent while the window is open join the same page.
+- On iPhone, the page explains how to save photos and videos straight to the Photos app.
+- iPhone HEIC photos are sent to Android phones as JPG, so they open in the gallery.
+- The PC window shows when the phone opens the page and what it downloaded.
+- Sharing stops when you close the window. Every link includes a random code,
+  so other devices on the network can't browse the files.
+
+The phone must be on the same Wi-Fi or home network as the PC. The first time,
+Windows asks whether Python may use the network. Allow it on **private networks**.
+
 ## Splitting PDFs
 
 Right-click a PDF → **Arcform → Split PDF ▸**. The parts go into a new folder
@@ -140,8 +158,9 @@ Unexpected errors are written to `arcform_error.log` in this folder.
 | `shrink.py` | Shrink to fit |
 | `clipboard.py` | Putting files on the clipboard |
 | `split.py` | Splitting PDFs |
+| `share.py` | Send to phone: the local download server and the phone page |
 | `merge_queue.py` | The PDF merge queue |
 | `tasks.py` | Jobs, and handing them to one shared window over a named pipe |
-| `window.py` | The job window, the merge queue editor and the PDF cutter |
+| `window.py` | The job window, the merge queue editor, the PDF cutter and the QR code window |
 | `menu.py` | Registry entries for the right-click menu |
 | `install.py` | Adds or removes the menu |

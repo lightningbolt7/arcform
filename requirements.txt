@@ -4,3 +4,4 @@ pdf2docx
 pymupdf
 pywin32
 imageio-ffmpeg
+qrcode

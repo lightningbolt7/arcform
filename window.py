@@ -15,6 +15,7 @@ import clipboard
 import converters
 import menu
 import merge_queue
+import share
 import split
 import tasks
 
@@ -740,4 +741,139 @@ class SplitWindow:
 
     def _close(self) -> None:
         self.doc.close()
+        self.root.destroy()
+
+
+# ------------------------------------------------------------- send to phone
+
+def open_share_window(listener, first_task) -> None:
+    window = ShareWindow(listener)
+    window.events.put(("add", Path(first_task["path"])))
+    window.run()
+
+
+class ShareWindow:
+    """A QR code for the phone to scan, and live news of what it downloaded."""
+
+    def __init__(self, listener):
+        self.listener = listener
+        self.events = queue.Queue()  # from the web server and pipe threads, handled on the Tk thread
+        self.stopped = threading.Event()
+        self.share = share.Share(lambda kind, data: self.events.put((kind, data)))
+        self.addresses = share.lan_addresses() or ["127.0.0.1"]
+        self.rows = []  # tree item for each shared file, in order
+        self.devices = []
+
+        self.root, px, heading = _make_root("Arcform - Send to phone")
+        self.px = px
+        root = self.root
+        root.protocol("WM_DELETE_WINDOW", self.close)
+        frame = ttk.Frame(root, padding=px(18))
+        frame.pack(fill="both", expand=True)
+
+        left = ttk.Frame(frame)
+        left.pack(side="left", fill="y", padx=(0, px(20)))
+        self.code = tk.Label(left, background="white", borderwidth=0)
+        self.code.pack()
+        self.link = ttk.Entry(left, justify="center")
+        self.link.pack(fill="x", pady=(px(10), 0))
+        self.address = tk.StringVar(value=self.addresses[0])
+        if len(self.addresses) > 1:
+            pick = ttk.Frame(left)
+            pick.pack(fill="x", pady=(px(6), 0))
+            ttk.Label(pick, text="Network:", foreground=MUTED).pack(side="left")
+            box = ttk.Combobox(pick, textvariable=self.address, values=self.addresses, state="readonly", width=16)
+            box.pack(side="left", padx=(px(6), 0))
+            box.bind("<<ComboboxSelected>>", lambda e: self._show_code())
+
+        right = ttk.Frame(frame)
+        right.pack(side="left", fill="both", expand=True)
+        ttk.Label(right, text="Scan with your phone's camera", font=heading).pack(anchor="w")
+        ttk.Label(right, text="Works on iPhone and Android, no app needed. Your phone has to be on the same "
+                              "Wi-Fi or home network as this PC.",
+                  foreground=MUTED, wraplength=px(400), justify="left").pack(anchor="w", pady=(px(4), px(12)))
+        self.tree = ttk.Treeview(right, columns=("file", "size", "status"), show="headings", height=6,
+                                 selectmode="none")
+        for col, title, width in (("file", "File", 190), ("size", "Size", 70), ("status", "Status", 150)):
+            self.tree.heading(col, text=title, anchor="w")
+            self.tree.column(col, width=px(width), anchor="w", stretch=col == "file")
+        self.tree.tag_configure("sent", foreground="#1e7d32")
+        self.tree.pack(fill="both", expand=True)
+        self.status = ttk.Label(right, text="Waiting for your phone…", wraplength=px(400), justify="left")
+        self.status.pack(anchor="w", pady=(px(10), 0))
+        ttk.Label(right, text="Page won't open on the phone? When Windows asks, allow Python on private "
+                              "networks. Also check the phone is on Wi-Fi, not mobile data.",
+                  foreground=MUTED, wraplength=px(400), justify="left").pack(anchor="w", pady=(px(6), 0))
+        buttons = ttk.Frame(right)
+        buttons.pack(fill="x", pady=(px(14), 0))
+        ttk.Button(buttons, text="Stop sharing", command=self.close).pack(side="right")
+
+        self._show_code()
+        threading.Thread(target=tasks.serve, daemon=True,
+                         args=(listener, lambda task: self.events.put(("add", Path(task["path"]))),
+                               self.stopped)).start()
+
+    def run(self) -> None:
+        _place(self.root)
+        self.root.after(100, self._poll)
+        self.root.mainloop()
+
+    def url(self) -> str:
+        return self.share.url(self.address.get())
+
+    def _show_code(self) -> None:
+        import qrcode
+        from PIL import Image, ImageDraw, ImageTk
+
+        qr = qrcode.QRCode(error_correction=qrcode.constants.ERROR_CORRECT_H, border=2)
+        qr.add_data(self.url())
+        qr.make(fit=True)
+        side = self.px(250)
+        qr.box_size = max(1, side // (qr.modules_count + 2 * qr.border))  # whole pixels per square scan best
+        img = qr.make_image(fill_color="#14161f", back_color="white").get_image().convert("RGB")
+        # The Arcform logo in the middle; strong error correction lets the code work around it.
+        if menu.LOGO.exists():
+            badge = img.width // 5
+            logo = Image.open(menu.LOGO).convert("RGBA").resize((badge, badge), Image.Resampling.LANCZOS)
+            spot = ((img.width - badge) // 2, (img.height - badge) // 2)
+            pad = badge // 10
+            ImageDraw.Draw(img).rounded_rectangle((spot[0] - pad, spot[1] - pad, spot[0] + badge + pad, spot[1] + badge + pad),
+                                                  radius=pad * 2, fill="white")
+            img.paste(logo, spot, logo)
+        self.code_image = ImageTk.PhotoImage(img)
+        self.code.config(image=self.code_image)
+        self.link.config(state="normal")
+        self.link.delete(0, "end")
+        self.link.insert(0, self.url())
+        self.link.config(state="readonly")
+
+    def _poll(self) -> None:
+        try:
+            while True:
+                kind, data = self.events.get_nowait()
+                if kind == "add" and self.share.add(data):
+                    size = share.human_size(data.stat().st_size)
+                    self.rows.append(self.tree.insert("", "end", values=(data.name, size, "Ready")))
+                    self.tree.configure(height=min(max(len(self.rows), 3), 10))
+                    self.root.lift()
+                elif kind == "visit":
+                    if data not in self.devices:
+                        self.devices.append(data)
+                    self.status.config(text=f"{' and '.join(self.devices)} opened the page. Tap a file to download it.")
+                elif kind == "sent":
+                    index, device = data
+                    for row in self.rows if index == "all" else [self.rows[index]]:
+                        self.tree.set(row, "status", f"✓ Sent to {device}")
+                        self.tree.item(row, tags=("sent",))
+        except queue.Empty:
+            pass
+        self.root.after(100, self._poll)
+
+    def close(self) -> None:
+        self.stopped.set()
+        try:
+            self.listener.close()
+        except OSError:
+            pass
+        self.share.stop()
         self.root.destroy()

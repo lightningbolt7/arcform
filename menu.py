@@ -14,10 +14,13 @@ from shrink import SHRINKABLE, SIZES
 APP_DIR = Path(__file__).resolve().parent
 SCRIPT = APP_DIR / "arcform.py"
 ICON = APP_DIR / "arcform.ico"
+LOGO = APP_DIR / "arcform.png"
 
 FILE_MENU = r"Software\Classes\SystemFileAssociations\{ext}\shell\Arcform"
 # Right-clicking empty space in a folder or on the desktop.
 BACKGROUND_MENU = r"Software\Classes\Directory\Background\shell\Arcform"
+# "Send to phone" works for any kind of file, so it has its own entry on every file.
+SHARE_ITEM = r"Software\Classes\*\shell\ArcformSendToPhone"
 
 # Submenu keys are shown in name order: conversions, Copy as, Shrink, then merge items.
 COPY_MENU = "20_copy"
@@ -109,6 +112,12 @@ def register_file_menus() -> None:
     add_item(FILE_MENU.format(ext=".pdf"), MERGE_ADD, "Add to merge queue",
              command("merge-add", '"%1"'), separator=True)
 
+    delete_tree(SHARE_ITEM)
+    set_value(SHARE_ITEM, "MUIVerb", "Send to phone")
+    if ICON.exists():
+        set_value(SHARE_ITEM, "Icon", str(ICON))
+    set_value(f"{SHARE_ITEM}\\command", "", command("share", '"%1"'))
+
 
 def refresh_merge_menu(count: int) -> None:
     """Show "Generate merge (N PDFs)" while the queue has files, hide it when empty."""
@@ -136,3 +145,4 @@ def unregister() -> None:
     for ext in CONVERSIONS:
         delete_tree(FILE_MENU.format(ext=ext))
     delete_tree(BACKGROUND_MENU)
+    delete_tree(SHARE_ITEM)

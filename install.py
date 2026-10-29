@@ -14,7 +14,6 @@ from converters import CONVERSIONS, copy_targets
 from shrink import SHRINKABLE
 
 
-LOGO_PNG = menu.APP_DIR / "arcform.png"
 ICON_SIZES = [16, 20, 24, 32, 40, 48, 64, 256]  # what Windows asks for at different display scales
 
 
@@ -66,7 +65,7 @@ def make_icon() -> None:
         return
     # Drawn big and scaled down, which smooths the edges.
     logo = draw_logo().resize((512, 512), Image.Resampling.LANCZOS)
-    logo.save(LOGO_PNG)
+    logo.save(menu.LOGO)
     logo.resize((256, 256), Image.Resampling.LANCZOS).save(menu.ICON, sizes=[(s, s) for s in ICON_SIZES])
 
 
